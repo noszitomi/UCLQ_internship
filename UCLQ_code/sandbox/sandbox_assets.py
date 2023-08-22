@@ -125,7 +125,7 @@ def observable(sigma, qc, basis_gates, seed=1, opt_level = 3):
     
     """
 
-    numQ = len(qc.qregs[1][:])
+    numQ = len(qc.qregs[1][:]) + 1
 
     sigma = sigma.to_gate()
     c_sigma = sigma.control()

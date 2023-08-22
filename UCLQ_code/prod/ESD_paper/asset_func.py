@@ -16,18 +16,6 @@ def iniQC(numReg, numQ, numAnc):
     return qc
 
 
-def GHZ(qc):
-
-    registers = qc.qregs[:0:-1]
-    numQubits = registers[0].size
-
-    for reg in registers:
-        qc.h(reg[0])
-
-        for qubit in range(numQubits-1):
-            qc.cnot(reg[qubit], reg[qubit+1])
-
-
 
 def derangement(qc):
     
@@ -102,20 +90,43 @@ def exp_value(fullQC, idQC, nb_shots, noise_model, seed = 1):
  
     return(prob_0/prob_0_prime)
 
-#------------------------------------------------------------------------
-# ! observable() needs to be updated to input a non-controlled observable 
-# and tanspile it into a controlled one !
-#------------------------------------------------------------------------
+
 def observable(sigma, qc, basis_gates, seed=1, opt_level = 3):
 
-    obs_t = transpile(sigma, basis_gates=basis_gates, optimization_level= opt_level, seed_transpiler=seed)
+    """Creates and applies the controlled version of a given observable to the
+    main circuit.
 
-    qubits = [*range(0, obs_t.num_qubits)]
+    Parameters
+    ----------
+    sigma : qiskit QuantumCircuit
+        The (non-controlled) observable we want to apply
+    qc : qiskit QuantumCircuit
+        The main circuit we want to apply the observable to
+    basis_gates : list
+        The lis of basis gates to witch the observable is transpiled to
+    opt_level : int
+        The optimization level for the transpilation
+
+    Returns
+    -------
+    A qiskit QuantumCircuit
     
-    qc = qc.compose(obs_t, qubits = qubits)
-    
+    """
+
+    numQ = len(qc.qregs[1][:]) + 1
+
+    sigma = sigma.to_gate()
+    c_sigma = sigma.control()
+
+    temp_circ = QuantumCircuit(numQ)
+    temp_circ.append(c_sigma, [*range(0, numQ)])
+
+    temp_circ_t = transpile(temp_circ, basis_gates = basis_gates, optimization_level = opt_level, seed_transpiler = seed)
+
+    qc = qc.compose(temp_circ_t, [*range(0, numQ)])
+
     return(qc)
-#----------------------------------------------------------------
+
 
 def circ_assembler(numReg, numQ, numAnc, sigma, basis_gates, seed = 1, der_op = True):
 
@@ -223,3 +234,14 @@ def cnots(qc, regs):
     for reg in regs:
         for qubit in reversed(range(numQubits)):
             qc.cnot(ancilla_qubit, registers[reg][qubit])
+
+def GHZ(qc):
+
+    registers = qc.qregs[:0:-1]
+    numQubits = registers[0].size
+
+    for reg in registers:
+        qc.h(reg[0])
+
+        for qubit in range(numQubits-1):
+            qc.cnot(reg[qubit], reg[qubit+1])
