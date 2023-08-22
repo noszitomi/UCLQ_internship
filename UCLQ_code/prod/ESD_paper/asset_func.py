@@ -52,8 +52,9 @@ def prob0(qc, nb_shots, noise_model, seed = 1):
     Estimator = AerEstimator(
         backend_options= {"noise_model": noise_model},
         run_options={"seed": seed, "shots" : nb_shots},
-        skip_transpilation = True,
-        approximation = True if nb_shots == 0 else False 
+        skip_transpilation = False,  # problematic, as the density matrix method does not support
+                                    # native cswaps.
+        approximation = True if nb_shots == None else False 
         )
 
     job = Estimator.run(qc, obs)
