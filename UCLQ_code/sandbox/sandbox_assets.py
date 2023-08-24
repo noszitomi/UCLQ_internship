@@ -71,7 +71,7 @@ def prob0(qc, nb_shots, noise_model, seed = 1):
 
     job = Estimator.run(qc, obs)
     result = job.result()
-    exp_val = result.values[0]
+    exp_val = result.vales[0]
 
     return((1/2)+(1/2)*exp_val.real) 
     
@@ -184,7 +184,7 @@ def circ_assembler(numReg, numQ, numAnc, sigma, basis_gates, seed = 1, der_op = 
     return(qc)
 
 
-def circ_tester(numReg, numQ, numAnc, sigma, basis_gates, nb_shots, noise_model, seed = 1, decomp = [None]):
+def circ_tester(numReg, numQ, numAnc, sigma, basis_gates, nb_shots, noise_model, decomp, seed = 1):
 
     """ Tester for evaluating the quantum circuit, it shows:
         - the expectation value for the mitigated and unmitigated case
