@@ -71,7 +71,7 @@ def prob0(qc, nb_shots, noise_model, seed = 1):
 
     job = Estimator.run(qc, obs)
     result = job.result()
-    exp_val = result.vales[0]
+    exp_val = result.values[0]
 
     return((1/2)+(1/2)*exp_val.real) 
     
