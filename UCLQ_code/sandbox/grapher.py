@@ -2,74 +2,28 @@ from sandbox_assets import *
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from qiskit_aer_noise import (NoiseModel, depolarizing_error, thermal_relaxation_error)
+from qiskit_aer.noise import (NoiseModel, depolarizing_error, thermal_relaxation_error)
 
 
 
 class Grapher:
 
-    def __init__(self, dictionary = None):
+    def __init__(self,  copies, initial_state, obs, basis_gates, nb_shots, error_range, depol, thermal, opt_level, seed):
 
-        if dictionary == None:
+        self._copies = copies 
+        self._initial_state = initial_state 
+        self._obs = obs
+        self._basis_gates = basis_gates
+        self._nb_shots = nb_shots
+        self._error_range = error_range
+        self._depol = depol
+        self._thermal = thermal
+        self._opt_level = opt_level
+        self._seed = seed
 
-            self._copies = None
-            self._initial_state = None 
-            self._obs = None
-            self._basis_gates = None
-            self._nb_shots = None
-            self._error_range = None
-            self._depol = None
-            self._thermal = None
-            self._opt_level = None
-            self._seed = None
-        
-        else:
-
-            self._copies = dictionary['copies']
-            self._initial_state = dictionary['initial_state']
-            self._obs = dictionary['obs']
-            self._basis_gates = dictionary['basis_gates']
-            self._nb_shots = dictionary['nb_shots']
-            self._error_range = dictionary['error_range']
-            self._depol = dictionary['depol']
-            self._thermal = dictionary['thermal']
-            self._opt_level = dictionary['opt_level']
-            self._seed = dictionary['seed']
 
         self._exact_expectation = None
         self._mit_unmit_values = None
-
-    def fromDict(self, dictionary):
-
-        self._copies = dictionary['copies']
-
-        if self._initial_state is None:
-            self._initial_state = dictionary['initial_state']
-        else:
-            print('Initial state is already set, please use addInitialState to overwrite')
-
-        if self._obs == None: 
-            self._obs = dictionary['obs']
-        else:
-            print('Observable is already set, please use addInitialState to overwrite')
-
-        self._basis_gates = dictionary['basis_gates']
-        self._nb_shots = dictionary['nb_shots']
-        self._error_range = dictionary['error_range']
-        self._depol = dictionary['depol']
-        self._thermal = dictionary['thermal']
-        self._opt_level = dictionary['opt_level']
-        self._seed = dictionary['seed']
-
-    def addInitialState(self, initial_state, show = False):
-        self._initial_state = initial_state
-
-        if show == True: display(initial_state.draw())
-
-    def addObservable(self, observable, show = False):
-        self._obs = observable
-
-        if show == True: display(observable.draw())
     
     def exactExpectation(self, show = False):
 
@@ -86,7 +40,7 @@ class Grapher:
         
         if show == True: print('The exact expectation value is: {}'.format(self._exact_expectation))
     
-    def expecForGraph(self):
+    def expecsForGraph(self):
 
         qubits = self._initial_state.num_qubits
 
@@ -108,12 +62,23 @@ class Grapher:
             
             if self._thermal == True:
 
-                t1, t2, time, excited_state_population = self._thermal_relaxation.values()
+                p_amp = 10**error
+                p_damp = 10**error
+                t_q1 = 3.271e-08
+                t_q2 = 4.196e-07
 
-                therm_1q = thermal_relaxation_error(t1 = t1, t2 = t2, time = time, excited_state_population = excited_state_population)
-                therm_2q = therm_1q.tensor(therm_1q)
+                t1_q1 = t_q1/(np.log(1/(1-p_amp)))
+                t2_q1 = (2*t1_q1*t_q1)/(t1_q1*np.log(1/(1-p_damp))+t_q1)
 
-                noise_m.add_all_qubit_quantum_error(therm_1q, ['rz', 'id', 'sx', 'x'])
+                t1_q2 = t_q2/(np.log(1/(1-p_amp)))
+                t2_q2 = (2*t1_q2*t_q2)/(t1_q2*np.log(1/(1-p_damp))+t_q2)
+                
+
+                therm_1q = thermal_relaxation_error(t1 = t1_q1, t2 = t2_q1, time = t_q1)
+                therm_2q = thermal_relaxation_error(t1 = t1_q2, t2 = t2_q2, time = t_q1).tensor(
+                           thermal_relaxation_error(t1 = t1_q2, t2 = t2_q2, time = t_q2))
+
+                noise_m.add_all_qubit_quantum_error(therm_1q, ['id', 'sx', 'x']) # for fake_backends we had t(rz) = 0
                 noise_m.add_all_qubit_quantum_error(therm_2q, ['cx'])
 
             mit_exp, unmit_exp = circTester(copies = self._copies, qubits = qubits, ancilla_qubits = 1,
@@ -130,7 +95,7 @@ class Grapher:
 
     def graphExpecError(self, ylim = None, xlim = None, figsize = (6, 3)):
 
-        if isinstance(self._mit_unmit_values, type(None)): self.expecForGraph()
+        if isinstance(self._mit_unmit_values, type(None)): self.expecsForGraph()
         if self._exact_expectation == None: self.exactExpectation()
 
         fig, ax = plt.subplots(figsize = figsize)
@@ -156,7 +121,7 @@ class Grapher:
 
     def graphAbsError(self, figsize = (6, 3)):
         
-        if isinstance(self._mit_unmit_values, type(None)): self.expecForGraph()
+        if isinstance(self._mit_unmit_values, type(None)): self.expecsForGraph()
         if self._exact_expectation == None: self.exactExpectation()
 
         fig, ax = plt.subplots(figsize = figsize)
