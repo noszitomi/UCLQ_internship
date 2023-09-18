@@ -1,6 +1,11 @@
 from qiskit import QuantumCircuit, QuantumRegister, AncillaRegister, ClassicalRegister, execute, transpile
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_aer.primitives import Estimator as AerEstimator
+from qiskit_aer.primitives import Sampler as AerSampler
+from qiskit_aer import AerSimulator
+from qiskit.circuit.library import QAOAAnsatz
+import numpy as np
+import random
 
 def iniQC(numReg, numQ, numAnc):
     
@@ -132,6 +137,30 @@ def circAssembler(copies, qubits, ancilla_qubits, initial_state, obs, basis_gate
     return(qc)
 
 
+
+def prob0_sampler(qc, nb_shots, noise_model, seed = 1):
+
+    qc = qc.measure(0)
+
+    Sampler = AerSampler(
+        backend_options = {"noise_model": noise_model},
+        run_options = {"seed": seed, "shots": nb_shots},
+        skip_transpilation = True,
+    )
+
+    job = Sampler.run(qc)
+    result = job.result()
+    counts = result.quasi_dists[0]
+    if len(counts)==1:
+        try:
+            counts['0']
+            exp_val = 1
+        except:
+            exp_val = -1
+    else:
+        exp_val = (counts['0']-counts['1'])/nb_shots
+
+
 def prob0(qc, nb_shots, noise_model, seed = 1):
 
     """ Calculates the 'probability' of measuring the ancilla quibit in state 0.
@@ -150,20 +179,44 @@ def prob0(qc, nb_shots, noise_model, seed = 1):
     A float expressing the probability 'prob0' from the paper.
 
     """
+    if nb_shots == None:
 
-    obs = SparsePauliOp((qc.num_qubits-1)*"I"+"Z")
+        obs = SparsePauliOp((qc.num_qubits-1)*"I"+"Z")
 
-    Estimator = AerEstimator(
-        backend_options= {"noise_model": noise_model},
-        run_options={"seed": seed, "shots" : nb_shots},
-        skip_transpilation = True,  # problematic, as the density matrix method does not support
-                                    # native cswaps.
-        approximation = True if nb_shots == None else False 
-        )
+        Estimator = AerEstimator(
+            backend_options= {"noise_model": noise_model},
+            run_options={"seed": seed, "shots" : nb_shots},
+            skip_transpilation = True,  # problematic, as the density matrix method does not support
+                                        # native cswaps.
+            approximation = True if nb_shots == None else False 
+            )
 
-    job = Estimator.run(qc, obs)
-    result = job.result()
-    exp_val = result.values[0]
+        job = Estimator.run(qc, obs)
+        result = job.result()
+        exp_val = result.values[0]
+
+    else:
+
+        backend = AerSimulator(noise_model = noise_model)
+        ancilla_qubit = qc.ancillas[0]
+
+        qc_meas = qc.copy()
+
+        c_reg = ClassicalRegister(1, "c_bit")
+        qc_meas.add_register(c_reg)
+
+        qc_meas.measure(ancilla_qubit, c_reg[0])
+
+        counts = execute(qc_meas, backend=backend, shots = nb_shots, optimization_level=0).result().get_counts()
+        if len(counts)==1:
+            try:
+                counts['0']
+                exp_val = 1
+            except:
+                exp_val = -1
+        else:
+            exp_val = (counts['0']-counts['1'])/nb_shots
+
 
     return(exp_val) 
     
@@ -275,3 +328,59 @@ def GHZ(qc):
 
         for qubit in range(numQubits-1):
             qc.cnot(reg[qubit], reg[qubit+1])
+
+def GHZ_inv(qc):
+
+    registers = qc.qregs[:]
+    numQubits = registers[0].size
+
+    for reg in registers:
+        for qubit in reversed(range(numQubits-1)):
+            qc.cnot(reg[qubit], reg[qubit+1])
+    qc.h(reg[0])
+
+def GHZreps(qubits, layers):
+
+    temp_circ = QuantumCircuit(qubits)
+
+    GHZ(temp_circ)
+            
+    for i in range(layers):
+        GHZ_inv(temp_circ)
+        GHZ(temp_circ)
+
+    return(temp_circ)
+
+def pauli_shifter(paulies):
+    return [paulies[i:] + paulies[:i] for i in range(len(paulies))]
+
+
+def spinRing(qubits, layers):
+
+    Zs = pauli_shifter('Z'+ (qubits-1)*'I')
+    XXs = pauli_shifter('XX' + (qubits-2)*'I')
+    rnd_omegas = [random.uniform(-1, 1) for _ in range(qubits)]
+
+    J = 0.1 
+
+    H_0_list = [(i, J) for i in XXs]
+    h0 = SparsePauliOp.from_list([*H_0_list])
+
+    H_1_list = [(i, j) for i, j in zip(Zs, rnd_omegas)]
+    h1 =SparsePauliOp.from_list([*H_1_list])
+
+    ansatz = QAOAAnsatz(cost_operator = h0, mixer_operator = h1, reps=layers)
+    random.seed(1)
+    ansatz = ansatz.assign_parameters(np.random.random(ansatz.num_parameters))
+
+    return(ansatz)
+
+
+def layers_layer(qc, layers):
+    inv_qc = qc.inverse()
+    layer = inv_qc.compose(qc)
+
+    for _ in range(layers):
+        qc = qc.compose(layer)
+
+    return(qc)
