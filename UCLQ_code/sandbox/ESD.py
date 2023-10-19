@@ -1,15 +1,16 @@
 from typing import Any
 from sandbox_assets import *
-from qiskit import QuantumCircuit, QuantumRegister, AncillaRegister, transpile
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, AncillaRegister, transpile
+from qiskit.transpiler import CouplingMap
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_aer.primitives import Estimator as AerEstimator
 from qiskit_aer.primitives import Sampler as AerSampler
 from qiskit.quantum_info import Statevector, Operator
 from qiskit.providers.fake_provider import FakeProviderForBackendV2
 from tqdm import tqdm
-from qiskit_aer.noise import (NoiseModel, depolarizing_error, thermal_relaxation_error, phase_damping_error,amplitude_damping_error )
+from qiskit_aer.noise import (NoiseModel, depolarizing_error, phase_damping_error,amplitude_damping_error)
 
-from qiskit_ibm_runtime import QiskitRuntimeService, Estimator, Session, Options
+from qiskit_ibm_runtime import QiskitRuntimeService, Estimator, Sampler, Session, Options
 
 import time
 from itertools import permutations 
@@ -20,16 +21,19 @@ import numpy as np
 class esdCircuit:
 
     def __init__(self,
-                copies = None,
-                initial_state = None, noisy_ini = True,
-                noisy_der = True,
-                obs = None, noisy_obs = True,
-                noisy_h = True,
-                basis_gates = None,
-                coupling_map = None,
-                seed = None,
-                opt_level = None,
-                double_anc = False):
+                copies : int = None,
+                initial_state : QuantumCircuit = None, 
+                noisy_ini : bool = True,
+                noisy_der : bool = True,
+                obs : QuantumCircuit = None,
+                noisy_obs : bool = True,
+                noisy_h : bool = True,
+                basis_gates : list = None,
+                coupling_map : CouplingMap = None,
+                seed : int = None,
+                opt_level : int = None,
+                double_anc : bool = False,
+                measure : bool = False):
         
         self._copies = copies 
         self._initial_state = initial_state 
@@ -40,6 +44,7 @@ class esdCircuit:
         self._seed = seed
 
         self._double_anc = double_anc
+        self._measure = measure
 
         self._noisy_ini_state = noisy_ini
         self._noisy_der = noisy_der
@@ -51,17 +56,6 @@ class esdCircuit:
         self._unmit_full_qc = None
         self._unmit_id_qc = None
 
-    def initial_state(self, initial_state = None):
-        if initial_state:
-            self._initial_state = initial_state
-            # if (self.allParamsSet() and self.allCircsSet()) == True:
-            #     self.updateCircs()
-
-        elif (initial_state == None and self._initial_state == None) :
-            print('The circuit does not have an initial state yet, please add one.')
-
-        else:
-            return(self._initial_state)
         
     def ini_state_gate_num(self):
         ini_state_T = transpile(self._initial_state, basis_gates = self._basis_gates,
@@ -69,7 +63,6 @@ class esdCircuit:
         return(sum(ini_state_T.count_ops().values()))
     
     def couplingDiff(self):
-
 
         ini_state_coupling = transpile(self._initial_state, basis_gates = self._basis_gates,
                                 optimization_level = self._opt_level, seed_transpiler = self._seed,  coupling_map = self._coupling_map)
@@ -84,7 +77,6 @@ class esdCircuit:
         full_simple = transpile(self.mitFullCirc(), basis_gates = self._basis_gates,
                                 optimization_level = self._opt_level, seed_transpiler = self._seed)
 
-        
         table = [
             ["", "no coupling", "with coupling"],
             ["initial state", sum(ini_state_simple.count_ops().values()), sum(ini_state_coupling.count_ops().values())],
@@ -93,70 +85,6 @@ class esdCircuit:
         for row in table:
             print("{: <20} {: <15} {: <15}".format(*row))
 
-
-    def copies(self, copies = None):
-        if copies:
-            self._copies = copies
-            # if (self.allParamsSet() and self.allCircsSet()) == True:
-            #     self.updateCircs()
-
-        elif (copies == None and self._copies == None) :
-            print('The circuit does not have an observable yet, please add one.')
-
-        else:
-            return(self._copies)
-
-    def observable(self, observable = None):
-        if observable:
-            self._obs = observable
-            # if (self.allParamsSet() and self.allCircsSet()) == True:
-            #     self.updateCircs()
-
-        elif (observable == None and self._obs == None) :
-            print('The circuit does not have an observable yet, please add one.')
-
-        else:
-            return(self._obs)
-    
-    def basis_gates(self, basis_gates = None):
-       
-        if basis_gates:
-            self._basis_gates = basis_gates
-            # if (self.allParamsSet() and self.allCircsSet()) == True:
-            #     self.updateCircs()
-
-        elif (basis_gates == None and self._basis_gates == None) :
-            print('The circuit does not have its basis gates specified, please add them.')
-        
-        else:
-            return(self._basis_gates)
-        
-
-    def opt_level(self, opt_level = None):
-        
-        if opt_level:
-            self._opt_level = opt_level
-            # if (self.allParamsSet() and self.allCircsSet()) == True:
-            #     self.updateCircs()
-
-        elif (opt_level == None and self._opt_level == None) :
-            print('The optimisation level has not been set yet, please set it.')
-        
-        else:
-            return(self._opt_level)
-
-    def seed(self, seed = None):
-        
-        if seed:
-            self._seed = seed
-            # if (self.allParamsSet() and self.allCircsSet()) == True:
-            #     self.updateCircs()
-
-        elif (seed == None and self._seed == None) :
-            print('The seed has not been set yet, please set it.')
-        
-        else:
-            return(self._seed)
         
     def circAssembler(self, noisy_ini_state = True, der_op = True, noisy_der = True, obs_op = True, noisy_obs = True, noisy_h = True):
 
@@ -179,12 +107,14 @@ class esdCircuit:
         temp_ini = self.iniState(qc=full_qc)
         
         if not noisy_ini_state: temp_ini = self.nonNoisy(temp_ini)
-
+        #full_qc.barrier()
         full_qc = full_qc.compose(temp_ini)
         
         full_qc.barrier()
-
+        #full_qc.barrier()
         for i in full_qc.ancillas: full_qc = full_qc.compose(h_t, i)
+        full_qc.barrier()
+        
         #full_qc = full_qc.compose(h_t, 0)
 
         #if self._double_anc: full_qc = full_qc.compose(cx_t, [0,1])
@@ -200,7 +130,6 @@ class esdCircuit:
             full_qc.barrier()
 
         #if self._double_anc: full_qc = full_qc.compose(cx_t, [0,1])
-
         if obs_op:
 
             obs_ini = self.observable(qc = full_qc)
@@ -210,18 +139,24 @@ class esdCircuit:
 
             full_qc.barrier()
         
+
         for i in full_qc.ancillas: full_qc = full_qc.compose(h_t, i)
         #full_qc = full_qc.compose(h_t, 0)
 
+        if self._measure:
+            full_qc.measure(0, 0)
+
+        temp_circ = QuantumCircuit(full_qc.num_qubits)
+        temp_circ = temp_circ.compose(full_qc)
+        full_qc = temp_circ
+
         if self._coupling_map:
-            full_qc = transpile(full_qc, basis_gates = self._basis_gates, optimization_level = self._opt_level,
+            full_qc = transpile(full_qc, basis_gates = self._basis_gates, optimization_level = 0,
                         seed_transpiler = self._seed, coupling_map = self._coupling_map)
 
         return(full_qc)
     
     def mitFullCirc(self): 
-
-        #if not isinstance(self._mit_id_qc, type(None)): return(self._mit_id_qc)
 
         self._mit_full_qc = self.circAssembler(noisy_ini_state = self._noisy_ini_state, der_op=True, noisy_der = self._noisy_der,
                                            obs_op = True, noisy_obs = self._noisy_obs, noisy_h = self._noisy_h)
@@ -229,15 +164,11 @@ class esdCircuit:
        
     def mitIDCirc(self):
         
-        #if not isinstance(self._mit_id_qc, type(None)): return(self._mit_id_qc)
-
         self._mit_id_qc = self.circAssembler(noisy_ini_state=self._noisy_ini_state, der_op=True, noisy_der = self._noisy_der,
                                            obs_op = False, noisy_h = self._noisy_h)
         return(self._mit_id_qc)
     
     def unmitFullCirc(self):
-
-        #if not isinstance(self._mit_id_qc, type(None)): return(self._mit_id_qc)
 
         self._unmit_full_qc = self.circAssembler(noisy_ini_state=self._noisy_ini_state, der_op=False,
                                             obs_op = True, noisy_obs=self._noisy_obs, noisy_h = self._noisy_h)
@@ -245,24 +176,9 @@ class esdCircuit:
        
     def unmitIDCirc(self):
 
-        #if not isinstance(self._mit_id_qc, type(None)): return(self._mit_id_qc)
-
         self._unmit_id_qc = self.circAssembler(noisy_ini_state=self._noisy_ini_state, der_op=False,
                                                obs_op = False, noisy_h = self._noisy_h)
         return(self._unmit_id_qc)
-
-    def allParamsSet(self):
-        if (self._copies and self._initial_state and self._obs and self._obs and
-            self._basis_gates and self._opt_level and self._seed) != None:
-            return(True)
-        else:
-            return(False)
-    
-    def allCircsSet(self):
-        if (self._mit_full_qc and self._mit_id_qc and self._unmit_full_qc and self._unmit_id_qc) != None:
-            return(True)
-        else:
-            return(False)
         
     def updateCircs(self):
         self.mitFullCirc()
@@ -270,12 +186,6 @@ class esdCircuit:
         self.unmitFullCirc()
         self.unmitIDCirc()
 
-    def checkNoisySettings(self, noisy_ini_state, noisy_der, noisy_obs, noisy_h):
-        if (self._noisy_ini_state == noisy_ini_state and self._noisy_der == noisy_der
-            and self._noisy_obs == noisy_obs and  self._noisy_h == noisy_h):
-            return(True)
-        else:
-            return(False)
 
     def nonNoisy(self, qc):
         for gate in qc.data:
@@ -296,6 +206,10 @@ class esdCircuit:
         for i in range(self._copies):
             qr = QuantumRegister(self._initial_state.num_qubits, f'reg_{i}')
             qc.add_register(qr)
+
+        if self._measure:
+            cr = ClassicalRegister(1)
+            qc.add_register(cr)
 
         return qc
 
@@ -352,89 +266,6 @@ class esdCircuit:
         return(qc)
 
 
-class esdResults:
-
-    def __init__(self, nb_shots = None, noise_model = None, backend = 'aer', coupling_map = None, seed = None):
-        
-        self._backend = backend
-        self._coupling_map = coupling_map
-        self._nb_shots = nb_shots
-        self._noise_model = noise_model
-        self._seed = seed
-        
-
-    def prob0(self, qc):
-
-        obs = SparsePauliOp((qc.num_qubits-qc.num_ancillas)*"I"+qc.num_ancillas*"Z")
-
-        if self._backend == 'aer':
-            estimator = AerEstimator(
-            backend_options= {"noise_model": self._noise_model,
-                              "coupling_map": self._coupling_map},
-            run_options={"seed": self._seed, "shots" : self._nb_shots},
-            skip_transpilation = True,  
-            approximation = True if self._nb_shots == None else False
-        )
-            
-            job = estimator.run(qc, obs)
-            
-        
-        
-        # look at initial layouts
-
-
-        elif self._backend == 'quasm':  # qasm!!
-
-            temp_backend =  service.get_backend('ibmq_qasm_simulator')
-
-            options = Options()
-            options.simulator = {'noise_model': self._noise_model,
-                                 'seed_simulator': self._seed,
-                                 'coupling_map': self._coupling_map}
-            options.execution.shots = self._nb_shots
-            options.optimization_level = 0
-            options.resilience_level = 0
-
-            # Think of approximation again 
-
-            qc_temp = QuantumCircuit(qc.num_qubits)
-            qc_temp = qc_temp.compose(qc)
-
-            with Session(service=service, backend=temp_backend):
-                estimator = Estimator(options = options)
-                job = estimator.run(circuits=qc_temp, observables=obs, skip_transpilation=True)
-
-
-
-        else:
-            temp_backend = service.get_backend(self._backend)
- 
-            options = Options()
-            options.optimization_level = 0
-            options.resilience_level = 0
-
-
-            qc_temp = QuantumCircuit(qc.num_qubits)
-            qc_temp = qc_temp.compose(qc)
-
-            with Session(service=service, backend=temp_backend):
-                estimator = Estimator(options = options)
-                job = estimator.run(circuits=qc_temp, observables=obs, skip_transpilation=True)
-
-
-        result = job.result()
-        exp_val = result.values[0]
-
-        return(exp_val)
-    
-
-    def expVal(self, fullQC, idQC):
-
-        prob_0 = self.prob0(fullQC)
-        prob_0_prime = self.prob0(idQC)
-
-        return(prob_0/prob_0_prime)
-
 class esdNoiseModel:
 
     def __init__(self):
@@ -442,6 +273,7 @@ class esdNoiseModel:
         self._model_source = None
 
         self._fake_backend_name = None
+        self._readout_error = False
 
         self._depol = None
         self._d_amp = None
@@ -453,9 +285,10 @@ class esdNoiseModel:
 
         self._noise_model = None
         
-    def specifyFakeDevice(self, fake_backend_name):
+    def specifyFakeDevice(self, fake_backend_name, readout_error = False):
         self._fake_backend_name = fake_backend_name
         self._model_source = 'fake_device'
+        self._readout_error = readout_error
     
     def specifyCustomParams(self, depol = None, d_amp = None, deph = None, two_qubit_scale = 1, google_scale = False ):
         self._depol = depol
@@ -497,7 +330,7 @@ class esdNoiseModel:
                     
                 backend.target[op_name][qubits].duration *= scale_error 
 
-        noise_m = NoiseModel.from_backend(backend, gate_error = True, readout_error = False, thermal_relaxation = True)
+        noise_m = NoiseModel.from_backend(backend, gate_error = True, readout_error = self._readout_error, thermal_relaxation = True)
         
         self._noise_model = noise_m
         return(self._noise_model, max_error)
@@ -555,10 +388,10 @@ class esdNoiseModel:
 class esdExperiment:
 
     def __init__(self,
-                 esd_noise_model = esdNoiseModel,
-                 esd_circuit = esdCircuit,
-                 err_range = None,
-                 seed = 1) -> None:
+                 esd_noise_model : esdNoiseModel = None,
+                 esd_circuit : esdCircuit = None,
+                 err_range  = None,
+                 seed = 1):
         
         self._err_range = err_range
         self._noise_model = esd_noise_model
@@ -577,6 +410,7 @@ class esdExperiment:
         self.mit_unmit_values = None
 
         self._layer_range = None
+        self._copies_range = None
         self._initial_state = None
 
     def getCircs(self):
@@ -588,6 +422,13 @@ class esdExperiment:
 
         temp_circ = QuantumCircuit(qc.num_qubits)
         temp_circ = temp_circ.compose(qc)
+
+        return(temp_circ)
+    
+    def samplerSR(self, qc):
+        temp_circ = QuantumCircuit(qc.num_qubits)
+        temp_circ = temp_circ.compose(qc)
+        temp_circ.measure_all()
 
         return(temp_circ)
     
@@ -642,32 +483,73 @@ class esdExperiment:
             else:
                 temp_initial_state = layers_layer(qc = og_initial_state, layers= int(layer) )
 
-            self._circuit.initial_state(temp_initial_state)
+            self._circuit._initial_state = temp_initial_state # test this!
             self.errRange()
 
         # return(self.circuits, self.noise_models, self.max_errors)
-    
+
+    def copiesRange(self, copies_range = None):
+
+        if copies_range: self._copies_range = copies_range
+
+        for copies in self._copies_range:
+
+            self._circuit._copies = copies # test thsi!
+            self.errRange()
+
+    def qubitRange(self, qubit_range = None, initial_state = None, layers = 10, rzTheta = np.pi/4):
+
+        if qubit_range: self._qubit_range = qubit_range
+        if initial_state: self._initial_state = initial_state
+
+        for qubits in self._qubit_range:
+
+            obs = QuantumCircuit(qubits)
+            obs.x(range(qubits))    
+             
+            if self._initial_state == 'GHZ':
+                temp_initial_state = GHZreps(qubits = qubits, layers = int(layers))
+                temp_initial_state.rz(rzTheta, 0)
+                
+            elif initial_state == 'spin-ring':
+                temp_initial_state = spinRing(qubits = qubits, layers = int(layers))
+
+            temp_circ = esdCircuit(copies = self._circuit._copies,
+                                   initial_state=temp_initial_state,
+                                   obs= obs,
+                                   basis_gates= self._circuit._basis_gates, 
+                                   coupling_map= self._circuit._coupling_map,
+                                   seed = self._circuit._seed, 
+                                   opt_level= self._circuit._opt_level)
+            self._circuit = temp_circ
+            self.errRange()
 
     
     def run(self, service, backend, coupling_map, nb_shots):
-        
+
         self._nb_shots = nb_shots
         self._service = service
         self._backend = backend
 
         mit_unmit_values = [[], # for mitigated
                             []] # for unmitigated
-       
+
         if backend == 'aer':
 
             for circuits, noise_models in zip(self.circuits, self.noise_models):
                 for noise_model in tqdm(noise_models):
-                    #print(noise_model)
 
                     estimator = AerEstimator(
-                        backend_options= {"noise_model": noise_model,
-                                          "coupling_map": coupling_map},
-                        run_options={"seed": self._seed, "shots" : nb_shots},
+                        backend_options= {
+                                         "noise_model": noise_model,
+                                        #  "coupling_map": coupling_map
+                                         },
+
+                        run_options={
+                                    "seed": self._seed,
+                                    "shots" : nb_shots
+                                    },
+
                         skip_transpilation = True,  
                         approximation = True if nb_shots == None else False
                     )
@@ -676,24 +558,71 @@ class esdExperiment:
                     for circuit in circuits:
                         obs = SparsePauliOp.from_sparse_list([('Z', [circuit.data[-1].qubits[0].index], 1)], num_qubits = circuit.num_qubits)
                         observables.append(obs)
-                    
-                    #print(observables)
 
                     job = estimator.run(circuits, observables)
 
-                    mitFull, mitID, unmitFull, unmitID = job.result().values
-
-                    exp_mit = mitFull/mitID
-                    exp_unmit = unmitFull/unmitID
-
-                    mit_unmit_values[0].append(exp_mit)
-                    mit_unmit_values[1].append(exp_unmit)
+                    self.expValues(job = job, mit_unmit_values = mit_unmit_values)
 
                 time.sleep(1) # gives IOStrem.flush timed out without it. 
             
             self.mit_unmit_values = mit_unmit_values
             # return(self.mit_unmit_values)
             return()
+        
+        if backend == 'aer_sampler':
+            for circuits, noise_models in zip(self.circuits, self.noise_models):
+                for noise_model in tqdm(noise_models):
+                    #print(noise_model)
+
+                    sampler = AerSampler(
+                        backend_options= {"noise_model": noise_model,
+                                          "coupling_map": coupling_map},
+                        run_options={"seed": self._seed, "shots" : nb_shots},
+                        skip_transpilation = True,  
+                        #approximation = True if nb_shots == None else False
+                    )
+
+                    job = sampler.run(circuits)
+                    return(job.result())
+        
+        if backend == 'qasm_sampler':
+
+            temp_circuits = [[self.standardRegisters(circuit) for circuit in sublist] for 
+                             sublist in self.circuits]
+
+            temp_backend = service.get_backend('ibmq_qasm_simulator')
+
+            with Session(service = self._service, backend = temp_backend): 
+
+                if self.noise_models:
+                    for circuits, noise_models in zip(temp_circuits, self.noise_models):
+                        for noise_model in noise_models:
+                    
+                            options = Options()
+
+                            options.simulator = {
+                                                'noise_model': noise_model,
+                                                'seed_simulator': self._seed,
+                                                # 'coupling_map': coupling_map
+                                                }
+                            
+                            options.execution.shots = nb_shots
+                            options.optimization_level = 0
+                            options.resilience_level = 0
+                            options.approximation = True if nb_shots == None else False
+
+                            sampler = Sampler(options = options)
+
+                            job = sampler.run(circuits = circuits,
+                                              shots= nb_shots,
+                                            #   skip_tranpsilation = True
+                                              )
+                            
+                            self._samplerExpValues(job = job, mit_unmit_values = mit_unmit_values)
+            
+            self.mit_unmit_values = mit_unmit_values
+            return
+
 
         if backend == 'qasm':
 
@@ -729,7 +658,7 @@ class esdExperiment:
                             job = estimator.run(circuits=circuits,
                                                 observables=observables,
                                                 shots = nb_shots,
-                                                skip_transpilation=True)
+                                                skip_transpilation=False)
                             
                             self.expValues(job = job, mit_unmit_values = mit_unmit_values)
                             
@@ -755,7 +684,7 @@ class esdExperiment:
                             job = estimator.run(circuits=circuits,
                                                 observables=observables,
                                                 shots = nb_shots,
-                                                #skip_transpilation=True
+                                                skip_transpilation=False
                                                 )
                             
 
@@ -765,7 +694,11 @@ class esdExperiment:
             return()
             # return(self.mit_unmit_values)
         
+
         else:
+            
+            temp_circuits = [[self.standardRegisters(circuit) for circuit in sublist] for 
+                             sublist in self.circuits]
             
             temp_backend = self._service.get_backend(backend)
 
@@ -779,24 +712,35 @@ class esdExperiment:
 
                 options.execution.shots = nb_shots
                 options.optimization_level = 0
-                options.resilience_level = 0
+                options.resilience_level = 1
 
-                estimator = Estimator(options = options)
 
-                observables = []
-                for circuit in circuits:
-                        obs = SparsePauliOp.from_sparse_list([('Z', [circuit.data[-1].qubits[0].index], 1)], num_qubits = circuit.num_qubits)
-                        observables.append(obs)
+                sampler = Sampler(options = options)
+
+                job = sampler.run(
+                                 circuits = circuits,
+                                 shots= nb_shots,
+                                 #   skip_tranpsilation = True
+                                 )
+                        
+                self._samplerExpValues(job = job, mit_unmit_values = mit_unmit_values)
+
+            #     estimator = Estimator(options = options)
+
+            #     observables = []
+            #     for circuit in circuits:
+            #             obs = SparsePauliOp.from_sparse_list([('Z', [circuit.data[-1].qubits[0].index], 1)], num_qubits = circuit.num_qubits)
+            #             observables.append(obs)
+
                 
-                job = estimator.run(circuits=circuits,
-                                    observables=observables,
-                                    skip_transpilation=True)
+            #     job = estimator.run(circuits=circuits,
+            #                         observables=observables,
+            #                         skip_transpilation=True)
                             
-                self.expValues(job = job, mit_unmit_values = mit_unmit_values)
+            #     self.expValues(job = job, mit_unmit_values = mit_unmit_values)
 
             self.mit_unmit_values = mit_unmit_values
-            return()
-            # return(self.mit_unmit_values)
+            return
                 
     def expValues(self, job, mit_unmit_values):
 
@@ -807,6 +751,20 @@ class esdExperiment:
 
         mit_unmit_values[0].append(exp_mit)
         mit_unmit_values[1].append(exp_unmit)
+
+    def _samplerExpValues(self, job, mit_unmit_values):
+
+        mitFull = 2*job.result().quasi_dists[0][0]-1
+        mitID = 2*job.result().quasi_dists[1][0]-1
+        unmitFull = 2*job.result().quasi_dists[2][0]-1
+        unmitID = 2*job.result().quasi_dists[3][0]-1
+
+        exp_mit = mitFull/mitID
+        exp_unmit = unmitFull/unmitID
+
+        mit_unmit_values[0].append(exp_mit)
+        mit_unmit_values[1].append(exp_unmit)
+
 
     
     def errorExpectationGraph(self, ylim = None, xlim = None, figsize = (10, 4), save = False):
@@ -890,449 +848,3 @@ class esdExperiment:
 
         if save:
             plt.savefig(save, format="pdf", bbox_inches="tight") 
-
-
-
-
-
-
-    
-
-class esdTests:
-
-    def __init__(self,
-                  esd_circuit = None,
-                  esd_noise_model = None,
-                  backend = 'aer',
-                  noisy_anc = True,
-                  nb_shots = None,
-                  err_range = None,
-                  layer_range = None,
-                  qubits_range = None,
-                  copies_range = None,
-                  seed = 1):
-
-        self._circuit = esd_circuit
-        self._noise_model = esd_noise_model
-        self._backend = backend 
-        self._nb_shots = nb_shots
-        self._seed = seed
-        self._err_range = err_range
-        self._layer_range = layer_range
-        self._qubits_range = qubits_range
-        self._copies_range = copies_range
-        self._noisy_anc = noisy_anc
-
-        self._noiseless_expectation = None
-
-        self._err_range_mit_unmit_values = None
-
-        self._depth_mit_unmit_list = None
-        self._depth_exact_expec_list = None
-        self._ansatz_gate_nums = None
-
-        self._width_mit_unmit_list = None
-        self._width_exact_expec_list = None
-
-        self._copies_mit_unmit_list = None
-        self._copies_exact_expec_list = None
-
-    def noiselessExpectation(self, save_result = False):
-
-        psi = Statevector.from_instruction(self._circuit._initial_state)
-        op = Operator.from_circuit(self._circuit._obs)
-
-        expectation_value = psi.evolve(op).inner(psi).real
-
-        if save_result: self._noiseless_expectation = expectation_value
-
-        return(expectation_value)
-
-
-        # temp_result = esdResults(nb_shots = self._nb_shots, noise_model = None, seed = self._seed)
-
-        # if save_result == True: self._noiseless_expectation = temp_result.expVal(fullQC = self._circuit.unmitFullCirc(), idQC= self._circuit.unmitIDCirc())
-
-        # return(temp_result.expVal(fullQC = self._circuit.unmitFullCirc(), idQC= self._circuit.unmitIDCirc()))
-    
-
-    def errRange(self, save_result = False):
-
-        coupling_map = self._circuit._coupling_map
-
-        mit_unmit_values = np.empty([3, self._err_range.size])
-
-        for i, error in tqdm(enumerate(self._err_range)):
-                
-            noise_m, max_error = self._noise_model.getNoiseModel(error)
-
-            temp_result = esdResults(nb_shots = self._nb_shots, noise_model = noise_m,
-                                     backend = self._backend, seed = self._seed,
-                                     coupling_map= coupling_map)
-
-            mit_unmit_values[0][i] = temp_result.expVal(fullQC = self._circuit.mitFullCirc(), idQC= self._circuit.mitIDCirc())
-            mit_unmit_values[1][i] = temp_result.expVal(fullQC = self._circuit.unmitFullCirc(), idQC= self._circuit.unmitIDCirc())
-            mit_unmit_values[2][i] = max_error
-
-        if save_result: self._err_range_mit_unmit_values = mit_unmit_values
-
-        return(mit_unmit_values)
-
-
-    def inilayerRange(self, initial_state, rzTheta = np.pi/4):
-
-        mit_unmit_list = []
-        exact_expec_list = []
-        ansatz_gate_nums = []
-        #intial_state_depths = []
-
-        for layer in tqdm(self._layer_range):
-            if initial_state == 'GHZ':
-                temp_initial_state = GHZreps(qubits = self._circuit._obs.num_qubits, layers = int(layer))
-                temp_initial_state.rz(rzTheta, 0)
-                
-            elif initial_state == 'spin-ring':
-                temp_initial_state = spinRing(qubits = self._circuit._obs.num_qubits, layers = int(layer))
-
-            self._circuit.initial_state(temp_initial_state)
-            ansatz_gate_nums.append(self._circuit.ini_state_gate_num())
-            #intial_state_depths.append(temp_initial_state.depth())
-
-            mit_unmit_list.append(self.errRange())
-            exact_expec_list.append(self.noiselessExpectation())
-
-            self._depth_mit_unmit_list = mit_unmit_list
-            self._depth_exact_expec_list = exact_expec_list
-            self._ansatz_gate_nums = ansatz_gate_nums
-            #self._intial_state_depths = intial_state_depths
-
-        return(self._depth_mit_unmit_list, self._depth_exact_expec_list, self._ansatz_gate_nums)
-    
-
-    def qubitRange(self, initial_state, err_range, rzTheta = np.pi/4):
-
-        #------------------------
-        #
-        # Think this one through!
-        #
-        #------------------------
-
-        # mit_unmits_list = []
-        # exact_expec_list = []
-
-        # if initial_state == 'GHZ':
-        #     for qubits in self._qubit_range:
-        #         temp_initial_state = GHZreps(qubits = qubits, layers = self._circuit)
-        #         temp_initial_state.rz(rzTheta, 0)
-
-        # for qubits in qubit_range:
-
-        #     temp_obs = QuantumCircuit(qubits)
-        #     temp_obs.compose(self._circuit.observable())
-        #     temp_obs.id(range(self._circuit.observable().num_qubits, qubits))
-        #     self._circuit.observable(temp_obs)
-
-        #     mit_unmits_list.append(self.errRange(err_range = err_range))
-        #     exact_expec_list.append(self.noiselessExpectation())
-
-
-        #     self._width_mit_unmit_list = mit_unmits_list
-        #     self._width_exact_expec_list = exact_expec_list
-
-        # return(self._width_mit_unmit_list, self._width_exact_expec_list)
-        pass
-    
-
-    def copiesRange(self):
-
-        mit_unmits_list = []
-        exact_expec_list = []
-        ansatz_gate_nums = []
-
-        for copies in self._copies_range:
-
-            self._circuit.copies(copies)
-
-            mit_unmits_list.append(self.errRange())
-            exact_expec_list.append(self.noiselessExpectation())
-            ansatz_gate_nums.append(self._circuit.ini_state_gate_num())
-
-
-        self._copies_mit_unmit_list = mit_unmits_list
-        self._copies_exact_expec_list = exact_expec_list
-        self._ansatz_gate_nums = ansatz_gate_nums
-
-        return(self._copies_mit_unmit_list, self._copies_exact_expec_list, self._ansatz_gate_nums)
-
-
-class esdGraphs:
-
-    def __init__(self, esd_Test):
-
-        self._esd_Test = esd_Test
-
-    def errorExpectation(self, ylim = None, xlim = None, figsize = (10, 4)):
-
-        if isinstance(self._esd_Test._err_range_mit_unmit_values,  type(None)): self._esd_Test.errRange(save_result = True)
-        if isinstance(self._esd_Test._noiseless_expectation, type(None)): self._esd_Test.noiselessExpectation(save_result = True)
-
-        mitigated_expectations = self._esd_Test._err_range_mit_unmit_values[0][:]
-        unmitigated_expectations = self._esd_Test._err_range_mit_unmit_values[1][:]
-        errors = self._esd_Test._err_range
-        #max_erros = self._esd_Test._err_range_mit_unmit_values[2][:]
-
-        ansatz_gate_num = self._esd_Test._circuit.ini_state_gate_num()
-
-        fig, ax = plt.subplots(figsize = figsize)
-
-        ax.plot(errors, mitigated_expectations, label = 'Mitigated')
-        ax.plot(errors, unmitigated_expectations, label = 'Unmitigated')
-
-        if ylim: ax.set_ylim(ylim) 
-        if xlim: ax.set_xlim(xlim)
-
-        ax.axhline(self._esd_Test._noiseless_expectation, color = 'mediumaquamarine', label = 'Known expectation value')
-
-        ax.legend()
-        
-        ax.set_title('Copies: {}, Shots: {}, backend: {} '.format(
-            self._esd_Test._circuit.copies(), self._esd_Test._nb_shots,
-            self._esd_Test._noise_model._fake_backend_name if self._esd_Test._noise_model._fake_backend_name else 'AerEstimator'))
-        
-        ax.set_xlabel('Ansatz circuit error rate (gates: {})'.format(ansatz_gate_num))
-        ax.set_ylabel('Expectation value')
-
-        
-    
-    def errorAbsError(self, ylim = None, xlim = None, figsize = (10, 4)):
-
-        if isinstance(self._esd_Test._err_range_mit_unmit_values,  type(None)): self._esd_Test.errRange(save_result = True)
-        if isinstance(self._esd_Test._noiseless_expectation, type(None)): self._esd_Test.noiselessExpectation(save_result = True)
-
-        mitigated_expectations = self._esd_Test._err_range_mit_unmit_values[0][:]
-        unmitigated_expectations = self._esd_Test._err_range_mit_unmit_values[1][:]
-        #errors = self._esd_Test._err_range
-        max_erros = self._esd_Test._err_range_mit_unmit_values[2][:]
-
-        ansatz_gate_num = self._esd_Test._circuit.ini_state_gate_num()
-
-        fig, ax = plt.subplots(figsize = figsize)
-
-        ax.loglog(ansatz_gate_num*max_erros,  np.abs(mitigated_expectations - self._esd_Test._noiseless_expectation), label = 'Mitigated')
-        ax.loglog(ansatz_gate_num*max_erros,  np.abs(unmitigated_expectations - self._esd_Test._noiseless_expectation), label = 'Unmitigated')
-
-        if ylim: ax.set_ylim(ylim) 
-        if xlim: ax.set_xlim(xlim)
-
-        ax.legend()
-        
-        ax.set_title('Copies: {}, Shots: {}, backend: {} '.format(
-            self._esd_Test._circuit.copies(), self._esd_Test._nb_shots,
-            self._esd_Test._noise_model._fake_backend_name if self._esd_Test._noise_model._fake_backend_name else 'AerEstimator'))
-        ax.set_xlabel('Ansatz circuit error rate (gates: {})'.format(ansatz_gate_num))
-
-        ax.set_ylabel('Absolute error in expectation value')
-
-        ax.legend(fontsize = 'x-small')
-
-    
-    # def errRangeGraph(self, ylim = None, xlim = None, figsize = (12, 8)):
-        
-    #     if isinstance(self._esd_Test._err_range_mit_unmit_values,  type(None)): self._esd_Test.errRange(save_result = True)
-    #     if isinstance(self._esd_Test._noiseless_expectation, type(None)): self._esd_Test.noiselessExpectation(save_result = True)
-
-    #     mitigated_expectations = self._esd_Test._err_range_mit_unmit_values[0][:]
-    #     unmitigated_expectations = self._esd_Test._err_range_mit_unmit_values[1][:]
-    #     errors = self._esd_Test._err_range
-    #     max_erros = self._esd_Test._err_range_mit_unmit_values[2][:]
-
-    #     ansatz_gate_num = self._esd_Test._circuit.ini_state_gate_num()
-
-    #     fig, ((ax1, ax2)) = plt.subplots(2,1, figsize = figsize)
-
-    #     ax1.plot(errors, mitigated_expectations, label = 'Mitigated')
-    #     ax1.plot(errors, unmitigated_expectations, label = 'Unmitigated')
-
-    #     if ylim != None: ax1.set_ylim(ylim) 
-    #     if xlim != None: ax1.set_xlim(xlim)
-
-    #     ax1.axhline(self._esd_Test._noiseless_expectation, color = 'mediumaquamarine', label = 'Known expectation value')
-
-    #     ax1.legend()
-        
-    #     if self._esd_Test._noise_model._fake_backend_name != None: 
-    #         ax1.set_title('Copies: {}, Shots: {}, backend: {} '.format(self._esd_Test._circuit.copies(), self._esd_Test._nb_shots, self._esd_Test._noise_model._fake_backend_name))
-    #         ax1.set_xlabel('Ansatz circuit error rate (gates: {})'.format(ansatz_gate_num))
-
-    #     else:
-    #         ax1.set_title('Copies = {}, Shots = {}'.format(self._esd_Test._circuit.copies(), self._esd_Test._nb_shots))
-    #         ax1.set_xlabel('Ansatz circuit error rate (gates: {})'.format(ansatz_gate_num))
-
-    #     ax1.set_ylabel('Expectation value')
-
-    #     ax2.loglog(ansatz_gate_num*max_erros,  np.abs(mitigated_expectations - self._esd_Test._noiseless_expectation), label = 'Mitigated')
-    #     ax2.loglog(ansatz_gate_num*max_erros,  np.abs(unmitigated_expectations - self._esd_Test._noiseless_expectation), label = 'Unitigated')
-
-    #     if ylim != None: ax2.set_ylim(ylim) 
-    #     if xlim != None: ax2.set_xlim(xlim)
-
-    #     ax2.legend()
-        
-    #     if self._esd_Test._noise_model._fake_backend_name != None: 
-    #         ax2.set_title('Copies: {}, Shots: {}, backend: {} '.format(self._esd_Test._circuit.copies(), self._esd_Test._nb_shots, self._esd_Test._noise_model._fake_backend_name))
-    #         ax2.set_xlabel('Ansatz circuit error rate (gates: {})'.format(ansatz_gate_num))
-
-    #     else:
-    #         ax2.set_title('Copies = {}, Shots = {}'.format(self._esd_Test._circuit.copies(), self._esd_Test._nb_shots))
-    #         ax2.set_xlabel('Ansatz circuit error rate (gates: {})'.format(ansatz_gate_num))
-
-    #     ax2.set_ylabel('Absolute error in expectation value')
-
-    #     plt.tight_layout()
-
-    
-    def layerErrorExpectation(self, initial_state, ylim = None, xlim = None, figsize = (10, 4)):
-
-
-        if isinstance(self._esd_Test._depth_mit_unmit_list,  type(None)): self._esd_Test.inilayerRange(initial_state = initial_state)
-
-        depth_mit_unmit_list = self._esd_Test._depth_mit_unmit_list
-        #depth_exact_expec_list = self._esd_Test._depth_exact_expec_list
-        ansatz_gate_nums = self._esd_Test._ansatz_gate_nums
-        errors = self._esd_Test._err_range
-
-        colors = np.flip(plt.cm.viridis(np.linspace(0,1,len(depth_mit_unmit_list)+2)), 0)
-
-        fig, ax = plt.subplots(figsize = figsize)
-
-        for i in range(len(depth_mit_unmit_list)):
-
-            mit_unmit = depth_mit_unmit_list[i]
-            #exact_expec = depth_exact_expec_list[i]
-            gate_num = ansatz_gate_nums[i]
-
-            ax.plot(errors, mit_unmit[0][:], color = colors[i], label = '{} gates - mit'.format(gate_num))
-            ax.plot(errors, mit_unmit[1][:], color = colors[i], linestyle = 'dotted', label = '{} gates - unmit'.format(gate_num))
-
-            if ylim: ax.set_ylim(ylim) 
-            if xlim: ax.set_xlim(xlim)
-
-
-        ax.legend(fontsize = 'x-small')
-        ax.set_title('Initial state: {} - expectation value'.format(initial_state))
-        ax.set_ylabel('Expectation value')
-        if self._esd_Test._noise_model._fake_backend_name:
-            ax.set_xlabel('Scale of {}\'s error probability').format(self._esd_Test._noise_model._fake_backend_name)
-        else:
-            ax.set_xlabel('Error probability')
-
-
-    def layerErrorAbsError(self, initial_state, ylim = None, xlim = None, figsize = (10, 4)):
-
-
-        if isinstance(self._esd_Test._depth_mit_unmit_list,  type(None)): self._esd_Test.inilayerRange(initial_state = initial_state)
-
-        depth_mit_unmit_list = self._esd_Test._depth_mit_unmit_list
-        depth_exact_expec_list = self._esd_Test._depth_exact_expec_list
-        ansatz_gate_nums = self._esd_Test._ansatz_gate_nums
-        #errors = self._esd_Test._err_range
-
-        colors = np.flip(plt.cm.viridis(np.linspace(0,1,len(depth_mit_unmit_list)+2)), 0)
-
-        fig, ax = plt.subplots(figsize = figsize)
-
-
-
-        for i in range(len(depth_mit_unmit_list)):
-
-            mit_unmit = depth_mit_unmit_list[i]
-            exact_expec = depth_exact_expec_list[i]
-            gate_num = ansatz_gate_nums[i]
-
-            ax.loglog(gate_num*mit_unmit[2][:],  np.abs(mit_unmit[0][:] - exact_expec), color = colors[i], label = '{} gates - mit'.format(gate_num))
-            ax.loglog(gate_num*mit_unmit[2][:],  np.abs(mit_unmit[1][:] - exact_expec),  color = colors[i], linestyle = 'dotted', label = '{} gates - unmit'.format(gate_num))
-
-
-            if ylim: ax.set_ylim(ylim) 
-            if xlim: ax.set_xlim(xlim)
-
-
-        ax.legend(fontsize = 'x-small')
-        ax.set_title('Initial state: {} - absolute error in expectation value'.format(initial_state))
-        ax.set_ylabel('Absolute error in expectation value')
-        if self._esd_Test._noise_model._fake_backend_name:
-            ax.set_xlabel('Ansatz circuit error rate (gates: {}, noise model: {})'.format(gate_num,  self._esd_Test._noise_model._fake_backend_name))
-        else:
-            ax.set_xlabel('Ansatz circuit error rate (gates: {})'.format(gate_num))
-
-    def copiesErrorExpectation(self, ylim = None, xlim = None, figsize = (10, 4)):
-
-        if isinstance(self._esd_Test._copies_mit_unmit_list,  type(None)): self._esd_Test.copiesRange()
-
-        copies_mit_unmit_list = self._esd_Test._copies_mit_unmit_list
-        #copies_exact_expec_list = self._esd_Test._copies_exact_expec_list
-        #ansatz_gate_nums = self._esd_Test._ansatz_gate_nums
-        errors = self._esd_Test._err_range
-
-        colors = np.flip(plt.cm.viridis(np.linspace(0,1,len(copies_mit_unmit_list)+2)), 0)
-
-        fig, ax = plt.subplots(figsize = figsize)
-
-
-
-        for i in range(len(copies_mit_unmit_list)):
-
-            mit_unmit = copies_mit_unmit_list[i]
-            #gate_num = ansatz_gate_nums[i]
-
-            ax.plot(errors, mit_unmit[0][:], color = colors[i], label = '{} copies - mit'.format(i))
-            ax.plot(errors, mit_unmit[1][:], color = colors[i], linestyle = 'dotted', label = '{} copies - unmit'.format(i))
-
-            if ylim: ax.set_ylim(ylim) 
-            if xlim: ax.set_xlim(xlim)
-
-
-        ax.legend(fontsize = 'x-small')
-        ax.set_title('copies')
-        ax.set_ylabel('Expectation value')
-        if self._esd_Test._noise_model._fake_backend_name:
-            ax.set_xlabel('Scale of {}\'s error probability').format(self._esd_Test._noise_model._fake_backend_name)
-        else:
-            ax.set_xlabel('Error probability')
-
-    def copiesErrorAbsError(self, ylim = None, xlim = None, figsize = (10, 4)):
-
-        if isinstance(self._esd_Test._copies_mit_unmit_list,  type(None)): self._esd_Test.copiesRange()
-
-        copies_mit_unmit_list = self._esd_Test._copies_mit_unmit_list
-        copies_exact_expec_list = self._esd_Test._copies_exact_expec_list
-        ansatz_gate_nums = self._esd_Test._ansatz_gate_nums
-        #errors = self._esd_Test._err_range
-
-        colors = np.flip(plt.cm.viridis(np.linspace(0,1,len(copies_mit_unmit_list)+2)), 0)
-
-        fig, ax = plt.subplots(figsize = figsize)
-
-
-
-        for i in range(len(copies_mit_unmit_list)):
-
-            mit_unmit = copies_mit_unmit_list[i]
-            exact_expec = copies_exact_expec_list[i]
-            gate_num = ansatz_gate_nums[i]
-
-            ax.plot(gate_num*mit_unmit[2][:],  np.abs(mit_unmit[0][:] - exact_expec), color = colors[i], label = '{} copies - mit'.format(i))
-            ax.plot(gate_num*mit_unmit[2][:],  np.abs(mit_unmit[1][:] - exact_expec), color = colors[i], linestyle = 'dotted', label = '{} copies - unmit'.format(i))
-
-            if ylim: ax.set_ylim(ylim) 
-            if xlim: ax.set_xlim(xlim)
-
-
-        ax.legend(fontsize = 'x-small')
-        ax.set_title('copies')
-        ax.set_ylabel('Absolute error in expectation value')
-        if self._esd_Test._noise_model._fake_backend_name:
-            ax.set_xlabel('Ansatz circuit error rate (gates: {}, noise model: {})'.format(gate_num,  self._esd_Test._noise_model._fake_backend_name))
-        else:
-            ax.set_xlabel('Ansatz circuit error rate (gates: {})'.format(gate_num))
-
